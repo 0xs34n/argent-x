@@ -11,6 +11,10 @@ export interface EstimateFeeResponse {
   amount: string
   unit: string
   suggestedMaxFee: string
+  usd?: {
+    amount: string
+    suggestedMaxFee: string
+  }
 }
 
 export type MessageType =

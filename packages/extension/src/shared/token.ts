@@ -13,10 +13,10 @@ export interface Token extends Required<RequestToken> {
   showAlways?: boolean
 }
 
-export const equalToken = (
-  a: Pick<RequestToken, "address" | "networkId">,
-  b: Pick<RequestToken, "address" | "networkId">,
-) => a.address === b.address && a.networkId === b.networkId
+export type UniqueToken = Pick<RequestToken, "address" | "networkId">
+
+export const equalToken = (a: UniqueToken, b: UniqueToken) =>
+  a.address === b.address && a.networkId === b.networkId
 
 export const parsedDefaultTokens: Token[] = defaultTokens.map((token) => ({
   ...token,
@@ -29,6 +29,7 @@ export const testDappToken = (networkId: string) =>
   )
 
 export const feeToken = (networkId: string) =>
-  defaultTokens.find(
-    ({ symbol, network }) => symbol === "ETH" && network === networkId,
+  parsedDefaultTokens.find(
+    ({ symbol, networkId: network }) =>
+      symbol === "ETH" && network === networkId,
   )

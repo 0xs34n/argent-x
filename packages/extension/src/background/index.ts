@@ -3,7 +3,8 @@ import { encode, number, stark } from "starknet"
 
 import { ActionItem } from "../shared/actionQueue"
 import { messageStream } from "../shared/messages"
-import { MessageType } from "../shared/MessageType"
+import { EstimateFeeResponse, MessageType } from "../shared/MessageType"
+import { feeToken } from "../shared/token"
 import { loadContracts } from "./accounts"
 import { getQueue } from "./actionQueue"
 import {
@@ -39,7 +40,9 @@ import {
   removePreAuthorization,
   resetPreAuthorizations,
 } from "./preAuthorizations"
+import { TokenPriceService } from "./price"
 import { Storage, clearStorage } from "./storage"
+import { createStaleWhileRevalidateCache } from "./swr"
 import { addToken, getTokens, hasToken, removeToken } from "./tokens"
 import { trackTransations } from "./transactions/notifications"
 import { getTransactionsStore } from "./transactions/store"
@@ -64,6 +67,14 @@ import { Wallet, WalletStorageProps } from "./wallet"
     await wallet.getAccounts(),
     getTransactionsStore,
     trackTransations,
+  )
+
+  const tokenPriceService = new TokenPriceService(
+    createStaleWhileRevalidateCache({
+      storage: new Storage({}, "token-price-swr"),
+      minTimeToStale: 1 * 60e3, // 1 minute
+      maxTimeToLive: 5 * 60e3, // 5 minutes
+    }),
   )
 
   messageStream.subscribe(async ([msg, sender]) => {
@@ -223,12 +234,38 @@ import { Wallet, WalletStorageProps } from "./wallet"
           const { amount, unit, suggestedMaxFee } =
             await starknetAccount.estimateFee(msg.data)
 
+          let usd: EstimateFeeResponse["usd"]
+          try {
+            const feeTokenResult = feeToken(selectedAccount.network.id)
+            if (!feeTokenResult) {
+              throw Error("no fee token found for network")
+            }
+            // having 2 different await and not calling it in parallel allows us to utilize the cache
+            const amountInUsd = await tokenPriceService.getPriceForTokenExact(
+              feeTokenResult,
+              amount,
+            )
+            const suggestedMaxFeeinUsd =
+              await tokenPriceService.getPriceForTokenExact(
+                feeTokenResult,
+                suggestedMaxFee,
+              )
+
+            usd = {
+              amount: amountInUsd.toString(),
+              suggestedMaxFee: suggestedMaxFeeinUsd.toString(),
+            }
+          } catch {
+            // dont do anything if we cant determine price as it's fully optional
+          }
+
           return sendToTabAndUi({
             type: "ESTIMATE_TRANSACTION_FEE_RES",
             data: {
               amount: number.toHex(amount),
               unit,
               suggestedMaxFee: number.toHex(suggestedMaxFee),
+              usd,
             },
           })
         } catch {
@@ -331,19 +368,12 @@ import { Wallet, WalletStorageProps } from "./wallet"
                 ? number.toHex(number.toBN(transactionsDetail?.nonce || 0))
                 : await getNonce(starknetAccount)
 
-              const { maxFee } = action.override || {}
-              const maxFeeOverrideExists =
-                maxFee !== undefined && maxFee !== null
-
               const transaction = await starknetAccount.execute(
                 transactions,
                 abis,
                 {
                   ...transactionsDetail,
                   nonce,
-                  // For now we want to set the maxFee to 0 in case the user has not provided a maxFee. This will change with the next release. The default behavior in starknet.js is to estimate the fee, so we need to pass 0 explicitly.
-                  // TODO: remove in next release
-                  maxFee: maxFeeOverrideExists ? maxFee : 0,
                 },
               )
 
